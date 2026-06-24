@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: ligo_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ligo_user
+      POSTGRES_PASSWORD: ligo_password
+      POSTGRES_DB: ligo_wallet
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # init.sql runs only on EMPTY volumes (first boot)
+      - ./init.sql:/docker-entrypoint-initdb.d/01_init.sql
+      # migrate.sql runs ALWAYS via the migrate service below
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ligo_user -d ligo_wallet']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Runs migrate.sql against an already-running postgres.
+  # Idempotent: safe to run on fresh or existing DBs.
+  migrate:
+    image: postgres:16-alpine
+    container_name: ligo_migrate
+    restart: 'no'
+    environment:
+      PGPASSWORD: ligo_password
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: >
+      psql -h postgres -U ligo_user -d ligo_wallet -f /migrate.sql
+    volumes:
+      - ./migrate.sql:/migrate.sql:ro
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ligo_wallet_service
+    restart: unless-stopped
+    ports:
+      - '3000:3000'
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USERNAME: ligo_user
+      DB_PASSWORD: ligo_password
+      DB_DATABASE: ligo_wallet
+      JWT_SECRET: ligo-super-secret-jwt-key-change-in-production
+      JWT_EXPIRES_IN: 3600
+      SEED_ADMIN_USERNAME: senior.backend
+      SEED_ADMIN_PASSWORD: Password123
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -f http://localhost:3000/health || exit 1']
+      interval: 15s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  postgres_data:

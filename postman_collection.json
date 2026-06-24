@@ -1,0 +1,949 @@
+{
+  "info": {
+    "name": "Ligo Wallet Service",
+    "_postman_id": "ligo-wallet-service-v2",
+    "description": "Ligo Backend Senior Challenge — Wallet Transaction Microservice\n\n**Flujo recomendado:**\n1. Ejecutar `POST /auth/login` → el token se guarda automáticamente\n2. Usar los demás requests con `{{token}}` ya cargado\n3. Los requests de Transactions generan `{{idempotencyKey}}` y guardan `{{lastTxnId}}` y `{{lastUserId}}` automáticamente",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    { "key": "baseUrl",        "value": "http://localhost:3000", "type": "string" },
+    { "key": "token",          "value": "", "type": "string" },
+    { "key": "idempotencyKey", "value": "", "type": "string" },
+    { "key": "lastTxnId",      "value": "", "type": "string" },
+    { "key": "lastUserId",     "value": "", "type": "string" }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "GET /health",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Status ok', () => pm.expect(pm.response.json().status).to.eql('ok'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/health"
+          }
+        },
+        {
+          "name": "GET /readiness",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('DB connected', () => pm.expect(pm.response.json().database).to.eql('connected'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": "{{baseUrl}}/readiness"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "POST /auth/login — válido",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.collectionVariables.set('token', json.token);",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Tiene token', () => pm.expect(json.token).to.be.a('string'));",
+                  "pm.test('expiresIn es 3600', () => pm.expect(json.expiresIn).to.eql(3600));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"senior.backend\",\n  \"password\": \"Password123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /auth/login — credenciales inválidas (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 401', () => pm.response.to.have.status(401));",
+                  "pm.test('Error INVALID_CREDENTIALS', () => pm.expect(pm.response.json().error).to.eql('INVALID_CREDENTIALS'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "url": "{{baseUrl}}/auth/login",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"wrong\",\n  \"password\": \"wrong\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /auth/login — sin token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": "{{baseUrl}}/wallets/wal_001/balance"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "POST /users — crear operador",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Tiene id', () => pm.expect(json.id).to.be.a('string'));",
+                  "pm.test('Role es OPERATOR', () => pm.expect(json.role).to.eql('OPERATOR'));",
+                  "pm.test('Status es ACTIVE', () => pm.expect(json.status).to.eql('ACTIVE'));",
+                  "pm.test('No expone passwordHash', () => pm.expect(json).to.not.have.property('passwordHash'));",
+                  "if (json.id) pm.collectionVariables.set('lastUserId', json.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/users",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"jane.ops\",\n  \"password\": \"Secret123\",\n  \"role\": \"OPERATOR\",\n  \"fullName\": \"Jane Ops\",\n  \"email\": \"jane@ligo.pe\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /users — crear admin",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Role es ADMIN', () => pm.expect(json.role).to.eql('ADMIN'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/users",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"bob.admin\",\n  \"password\": \"Admin456\",\n  \"role\": \"ADMIN\",\n  \"fullName\": \"Bob Admin\",\n  \"email\": \"bob@ligo.pe\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /users — crear viewer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Role es VIEWER', () => pm.expect(pm.response.json().role).to.eql('VIEWER'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/users",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"carol.viewer\",\n  \"password\": \"View789\",\n  \"role\": \"VIEWER\",\n  \"fullName\": \"Carol Viewer\",\n  \"email\": \"carol@ligo.pe\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /users — username duplicado (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('Error USERNAME_TAKEN', () => pm.expect(pm.response.json().error).to.eql('USERNAME_TAKEN'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/users",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"jane.ops\",\n  \"password\": \"Secret123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /users — password débil (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/users",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"weak.user\",\n  \"password\": \"123\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /users — sin permiso ADMIN (403)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 403', () => pm.response.to.have.status(403));",
+                  "pm.test('Error FORBIDDEN', () => pm.expect(pm.response.json().error).to.eql('FORBIDDEN'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{operatorToken}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/users",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"username\": \"intruder\",\n  \"password\": \"Intruder1\"\n}"
+            }
+          }
+        },
+        {
+          "name": "GET /users — listar todos (ADMIN)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Es un array', () => pm.expect(pm.response.json()).to.be.an('array'));",
+                  "pm.test('Sin passwordHash', () => {",
+                  "  pm.response.json().forEach(u => pm.expect(u).to.not.have.property('passwordHash'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/users"
+          }
+        },
+        {
+          "name": "GET /users/me — mi perfil",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Username correcto', () => pm.expect(json.username).to.eql('senior.backend'));",
+                  "pm.test('Role ADMIN', () => pm.expect(json.role).to.eql('ADMIN'));",
+                  "pm.test('Sin passwordHash', () => pm.expect(json).to.not.have.property('passwordHash'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/users/me"
+          }
+        },
+        {
+          "name": "GET /users/:id — por ID (ADMIN)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Tiene id', () => pm.expect(pm.response.json().id).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/users/{{lastUserId}}"
+          }
+        },
+        {
+          "name": "GET /users/:id — no encontrado (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('Error USER_NOT_FOUND', () => pm.expect(pm.response.json().error).to.eql('USER_NOT_FOUND'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/users/00000000-0000-0000-0000-000000000000"
+          }
+        },
+        {
+          "name": "PATCH /users/:id — cambiar rol a VIEWER",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Role actualizado a VIEWER', () => pm.expect(pm.response.json().role).to.eql('VIEWER'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/users/{{lastUserId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"VIEWER\"\n}"
+            }
+          }
+        },
+        {
+          "name": "PATCH /users/:id — suspender usuario",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Status SUSPENDED', () => pm.expect(pm.response.json().status).to.eql('SUSPENDED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/users/{{lastUserId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"SUSPENDED\"\n}"
+            }
+          }
+        },
+        {
+          "name": "PATCH /users/:id — actualizar fullName y email",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('fullName actualizado', () => pm.expect(pm.response.json().fullName).to.eql('Jane Updated'));",
+                  "pm.test('email actualizado', () => pm.expect(pm.response.json().email).to.eql('jane.updated@ligo.pe'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/users/{{lastUserId}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Jane Updated\",\n  \"email\": \"jane.updated@ligo.pe\"\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Wallets",
+      "item": [
+        {
+          "name": "GET /wallets/:id/balance — wal_001",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('walletId correcto', () => pm.expect(json.walletId).to.eql('wal_001'));",
+                  "pm.test('Currency PEN', () => pm.expect(json.currency).to.eql('PEN'));",
+                  "pm.test('Balance es string decimal', () => pm.expect(json.availableBalance).to.match(/^\\d+\\.\\d{2}$/));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/wallets/wal_001/balance"
+          }
+        },
+        {
+          "name": "GET /wallets/:id/balance — no encontrada (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('Error WALLET_NOT_FOUND', () => pm.expect(pm.response.json().error).to.eql('WALLET_NOT_FOUND'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/wallets/wal_999/balance"
+          }
+        },
+        {
+          "name": "GET /wallets/:id/movements — paginado",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Tiene movements array', () => pm.expect(json.movements).to.be.an('array'));",
+                  "pm.test('Tiene total', () => pm.expect(json.total).to.be.a('number'));",
+                  "pm.test('Tiene page y pageSize', () => {",
+                  "  pm.expect(json.page).to.eql(1);",
+                  "  pm.expect(json.pageSize).to.eql(20);",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/wallets/wal_001/movements?page=1&pageSize=20&type=ALL&status=ALL",
+              "query": [
+                { "key": "page",     "value": "1" },
+                { "key": "pageSize", "value": "20" },
+                { "key": "type",     "value": "ALL" },
+                { "key": "status",   "value": "ALL" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "GET /wallets/:id/movements — filtro DEBIT",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Solo DEBIT', () => {",
+                  "  pm.response.json().movements.forEach(m => pm.expect(m.type).to.eql('DEBIT'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/wallets/wal_001/movements?type=DEBIT",
+              "query": [{ "key": "type", "value": "DEBIT" }]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Transactions",
+      "item": [
+        {
+          "name": "POST /transactions — DEBIT",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set('idempotencyKey', pm.variables.replaceIn('{{$guid}}'));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Status COMPLETED', () => pm.expect(json.status).to.eql('COMPLETED'));",
+                  "pm.test('Type DEBIT', () => pm.expect(json.type).to.eql('DEBIT'));",
+                  "pm.test('Amount es string decimal', () => pm.expect(json.amount).to.match(/^\\d+\\.\\d{2}$/));",
+                  "if (json.transactionId) pm.collectionVariables.set('lastTxnId', json.transactionId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",  "value": "Bearer {{token}}" },
+              { "key": "Content-Type",   "value": "application/json" },
+              { "key": "Idempotency-Key","value": "{{idempotencyKey}}" }
+            ],
+            "url": "{{baseUrl}}/transactions",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"walletId\": \"wal_001\",\n  \"type\": \"DEBIT\",\n  \"amount\": \"25.50\",\n  \"currency\": \"PEN\",\n  \"description\": \"Pago QR comercio\",\n  \"externalReference\": \"qr_789456\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /transactions — DEBIT retry idempotente",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Mismo transactionId (idempotencia)', () => {",
+                  "  pm.expect(pm.response.json().transactionId).to.eql(pm.collectionVariables.get('lastTxnId'));",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",  "value": "Bearer {{token}}" },
+              { "key": "Content-Type",   "value": "application/json" },
+              { "key": "Idempotency-Key","value": "{{idempotencyKey}}" }
+            ],
+            "url": "{{baseUrl}}/transactions",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"walletId\": \"wal_001\",\n  \"type\": \"DEBIT\",\n  \"amount\": \"25.50\",\n  \"currency\": \"PEN\",\n  \"description\": \"Pago QR comercio\",\n  \"externalReference\": \"qr_789456\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /transactions — misma key, body diferente (409)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 409', () => pm.response.to.have.status(409));",
+                  "pm.test('Error IDEMPOTENCY_CONFLICT', () => pm.expect(pm.response.json().error).to.eql('IDEMPOTENCY_CONFLICT'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",  "value": "Bearer {{token}}" },
+              { "key": "Content-Type",   "value": "application/json" },
+              { "key": "Idempotency-Key","value": "{{idempotencyKey}}" }
+            ],
+            "url": "{{baseUrl}}/transactions",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"walletId\": \"wal_001\",\n  \"type\": \"DEBIT\",\n  \"amount\": \"999.00\",\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /transactions — sin Idempotency-Key (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 400', () => pm.response.to.have.status(400));",
+                  "pm.test('Error MISSING_IDEMPOTENCY_KEY', () => pm.expect(pm.response.json().error).to.eql('MISSING_IDEMPOTENCY_KEY'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{token}}" },
+              { "key": "Content-Type",  "value": "application/json" }
+            ],
+            "url": "{{baseUrl}}/transactions",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"walletId\": \"wal_001\",\n  \"type\": \"DEBIT\",\n  \"amount\": \"10.00\",\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /transactions — saldo insuficiente (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('Error INSUFFICIENT_BALANCE', () => pm.expect(pm.response.json().error).to.eql('INSUFFICIENT_BALANCE'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",  "value": "Bearer {{token}}" },
+              { "key": "Content-Type",   "value": "application/json" },
+              { "key": "Idempotency-Key","value": "{{$guid}}" }
+            ],
+            "url": "{{baseUrl}}/transactions",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"walletId\": \"wal_001\",\n  \"type\": \"DEBIT\",\n  \"amount\": \"999999.00\",\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /transactions — wallet bloqueada (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('Error WALLET_BLOCKED', () => pm.expect(pm.response.json().error).to.eql('WALLET_BLOCKED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",  "value": "Bearer {{token}}" },
+              { "key": "Content-Type",   "value": "application/json" },
+              { "key": "Idempotency-Key","value": "{{$guid}}" }
+            ],
+            "url": "{{baseUrl}}/transactions",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"walletId\": \"wal_005\",\n  \"type\": \"DEBIT\",\n  \"amount\": \"10.00\",\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /transactions — wallet inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('Error WALLET_NOT_FOUND', () => pm.expect(pm.response.json().error).to.eql('WALLET_NOT_FOUND'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",  "value": "Bearer {{token}}" },
+              { "key": "Content-Type",   "value": "application/json" },
+              { "key": "Idempotency-Key","value": "{{$guid}}" }
+            ],
+            "url": "{{baseUrl}}/transactions",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"walletId\": \"wal_999\",\n  \"type\": \"DEBIT\",\n  \"amount\": \"10.00\",\n  \"currency\": \"PEN\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /transactions — moneda distinta (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('Error CURRENCY_MISMATCH', () => pm.expect(pm.response.json().error).to.eql('CURRENCY_MISMATCH'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",  "value": "Bearer {{token}}" },
+              { "key": "Content-Type",   "value": "application/json" },
+              { "key": "Idempotency-Key","value": "{{$guid}}" }
+            ],
+            "url": "{{baseUrl}}/transactions",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"walletId\": \"wal_001\",\n  \"type\": \"DEBIT\",\n  \"amount\": \"10.00\",\n  \"currency\": \"USD\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /transactions — CREDIT",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Type CREDIT', () => pm.expect(pm.response.json().type).to.eql('CREDIT'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",  "value": "Bearer {{token}}" },
+              { "key": "Content-Type",   "value": "application/json" },
+              { "key": "Idempotency-Key","value": "{{$guid}}" }
+            ],
+            "url": "{{baseUrl}}/transactions",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"walletId\": \"wal_002\",\n  \"type\": \"CREDIT\",\n  \"amount\": \"200.00\",\n  \"currency\": \"PEN\",\n  \"description\": \"Recarga de saldo\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /transactions/transfer",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Status COMPLETED', () => pm.expect(json.status).to.eql('COMPLETED'));",
+                  "pm.test('Tiene debitTransactionId', () => pm.expect(json.debitTransactionId).to.be.a('string'));",
+                  "pm.test('Tiene creditTransactionId', () => pm.expect(json.creditTransactionId).to.be.a('string'));",
+                  "if (json.debitTransactionId) pm.collectionVariables.set('lastTxnId', json.debitTransactionId);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",  "value": "Bearer {{token}}" },
+              { "key": "Content-Type",   "value": "application/json" },
+              { "key": "Idempotency-Key","value": "{{$guid}}" }
+            ],
+            "url": "{{baseUrl}}/transactions/transfer",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sourceWalletId\": \"wal_001\",\n  \"targetWalletId\": \"wal_002\",\n  \"amount\": \"100.00\",\n  \"currency\": \"PEN\",\n  \"description\": \"Transferencia entre usuarios\"\n}"
+            }
+          }
+        },
+        {
+          "name": "GET /transactions/:id — status",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('Status 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Tiene transactionId', () => pm.expect(json.transactionId).to.be.a('string'));",
+                  "pm.test('Tiene status', () => pm.expect(json.status).to.be.a('string'));",
+                  "pm.test('Tiene createdAt', () => pm.expect(json.createdAt).to.be.a('string'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/transactions/{{lastTxnId}}"
+          }
+        },
+        {
+          "name": "GET /transactions/:id — no encontrada (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 404', () => pm.response.to.have.status(404));",
+                  "pm.test('Error TRANSACTION_NOT_FOUND', () => pm.expect(pm.response.json().error).to.eql('TRANSACTION_NOT_FOUND'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": "{{baseUrl}}/transactions/txn_nonexistent"
+          }
+        },
+        {
+          "name": "POST /transactions/:id/reversal",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "const json = pm.response.json();",
+                  "pm.test('Status 201', () => pm.response.to.have.status(201));",
+                  "pm.test('Type REVERSAL', () => pm.expect(json.type).to.eql('REVERSAL'));",
+                  "pm.test('Status COMPLETED', () => pm.expect(json.status).to.eql('COMPLETED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",  "value": "Bearer {{token}}" },
+              { "key": "Content-Type",   "value": "application/json" },
+              { "key": "Idempotency-Key","value": "{{$guid}}" }
+            ],
+            "url": "{{baseUrl}}/transactions/{{lastTxnId}}/reversal",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Merchant refund / reversal\",\n  \"externalReference\": \"rev_123456\"\n}"
+            }
+          }
+        },
+        {
+          "name": "POST /transactions/:id/reversal — doble reversa (422)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test('Status 422', () => pm.response.to.have.status(422));",
+                  "pm.test('Error TRANSACTION_ALREADY_REVERSED', () => pm.expect(pm.response.json().error).to.eql('TRANSACTION_ALREADY_REVERSED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Authorization",  "value": "Bearer {{token}}" },
+              { "key": "Content-Type",   "value": "application/json" },
+              { "key": "Idempotency-Key","value": "{{$guid}}" }
+            ],
+            "url": "{{baseUrl}}/transactions/{{lastTxnId}}/reversal",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Segundo intento de reversa\"\n}"
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
